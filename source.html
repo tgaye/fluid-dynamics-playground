@@ -1,0 +1,332 @@
+<!DOCTYPE html>
+
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>Fluid Dynamics Playground</title>
+    <style>
+        body {
+            margin: 0;
+            padding: 0;
+            background: #121212;
+            overflow: hidden;
+            font-family: 'Arial', sans-serif;
+        }
+        #canvas-container {
+            width: 100%;
+            max-width: 1200px;
+            margin: 0 auto;
+            display: flex;
+            justify-content: center;
+            position: relative;
+        }
+        #instructions {
+            position: absolute;
+            bottom: 20px;
+            left: 50%;
+            transform: translateX(-50%);
+            color: rgba(255, 255, 255, 0.7);
+            text-align: center;
+            font-size: 14px;
+            pointer-events: none;
+            transition: opacity 2s;
+        }
+    </style>
+    <script src="https://cdn.jsdelivr.net/npm/p5@1.8.0/lib/p5.js"></script>
+
+<base target="_self">
+
+
+    <div id="canvas-container"></div>
+    <div id="instructions">Drag to create obstacles · Click to change fluid properties</div>
+
+    <script>
+        const sketch = (p) => {
+            // Fluid system variables
+            let particles = [];
+            let obstacles = [];
+            let flowField = [];
+            let fieldResolution = 20;
+            let cols, rows;
+            
+            // Physics parameters
+            let viscosity = 0.5;
+            let gravity = 0.1;
+            let pressure = 0.2;
+            let turbulence = 0.3;
+            
+            // Visual parameters
+            let colorPalette = ['#5BCEFA', '#F5A9B8', '#FFFFFF', '#F5A9B8', '#5BCEFA'];
+            let bgColor;
+            let isDragging = false;
+            let lastMousePos = p.createVector(0, 0);
+            
+            // Performance management
+            let maxParticles = 2000;
+            let particleSpawnRate = 10;
+            let quality = 1;
+            let lastFrameRateCheck = 0;
+            
+            p.setup = () => {
+                let canvas = p.createCanvas(p.min(p.windowWidth, 1200), p.min(p.windowHeight, 800));
+                canvas.parent('canvas-container');
+                bgColor = p.color(18, 18, 30);
+                
+                cols = Math.floor(p.width / fieldResolution);
+                rows = Math.floor(p.height / fieldResolution);
+                
+                initializeFlowField();
+                spawnInitialParticles(500);
+                
+                p.noStroke();
+                p.background(bgColor);
+            };
+            
+            function initializeFlowField() {
+                flowField = new Array(cols);
+                for (let i = 0; i < cols; i++) {
+                    flowField[i] = new Array(rows);
+                    for (let j = 0; j < rows; j++) {
+                        let angle = p.noise(i * 0.1, j * 0.1) * p.TWO_PI;
+                        flowField[i][j] = p5.Vector.fromAngle(angle).mult(0.5);
+                    }
+                }
+            }
+            
+            function spawnInitialParticles(count) {
+                for (let i = 0; i < count && particles.length < maxParticles; i++) {
+                    particles.push(createParticle(p.random(p.width), p.random(p.height)));
+                }
+            }
+            
+            function createParticle(x, y) {
+                return {
+                    pos: p.createVector(x, y),
+                    vel: p.createVector(p.random(-1, 1), p.random(-1, 1)),
+                    acc: p.createVector(0, 0),
+                    size: p.random(3, 8),
+                    color: getColorFromPalette(colorPalette),
+                    life: p.random(100, 200),
+                    maxLife: 200
+                };
+            }
+            
+            function getColorFromPalette(palette) {
+                let index = Math.floor(p.random(palette.length));
+                let c = p.color(palette[index]);
+                c.setAlpha(150);
+                return c;
+            }
+            
+            p.draw = () => {
+                // Adaptive quality based on frame rate
+                if (p.millis() - lastFrameRateCheck > 1000) {
+                    adjustQuality();
+                    lastFrameRateCheck = p.millis();
+                }
+                
+                // Fading background for motion trails
+                p.fill(bgColor);
+                p.rect(0, 0, p.width, p.height);
+                
+                // Update flow field
+                updateFlowField();
+                
+                // Handle particle physics
+                updateParticles();
+                
+                // Draw obstacles
+                drawObstacles();
+                
+                // Visual feedback for interaction
+                if (isDragging) {
+                    showInteractionFeedback();
+                }
+                
+                // Fade out instructions after 10 seconds
+                if (p.frameCount === 600) {
+                    p.select('#instructions').style('opacity', '0');
+                }
+            };
+            
+            function adjustQuality() {
+                let currentFPS = p.frameRate();
+                if (currentFPS < 45 && quality > 0.5) {
+                    quality *= 0.9;
+                    particleSpawnRate = Math.max(5, particleSpawnRate * 0.9);
+                } else if (currentFPS > 55 && quality < 1) {
+                    quality *= 1.1;
+                    particleSpawnRate = Math.min(20, particleSpawnRate * 1.1);
+                }
+            }
+            
+            function updateFlowField() {
+                let time = p.millis() * 0.0001;
+                for (let i = 0; i < cols; i++) {
+                    for (let j = 0; j < rows; j++) {
+                        let angle = p.noise(i * 0.1, j * 0.1, time) * p.TWO_PI * turbulence;
+                        flowField[i][j] = p5.Vector.fromAngle(angle).mult(pressure * 2);
+                    }
+                }
+            }
+            
+            function updateParticles() {
+                // Add new particles
+                if (particles.length < maxParticles * 0.8 && p.frameCount % 3 === 0) {
+                    for (let i = 0; i < particleSpawnRate * quality; i++) {
+                        particles.push(createParticle(p.random(p.width), 0));
+                    }
+                }
+                
+                // Update existing particles
+                for (let i = particles.length - 1; i >= 0; i--) {
+                    let particle = particles[i];
+                    
+                    // Apply flow field forces
+                    let fieldX = Math.floor(p.constrain(particle.pos.x / fieldResolution, 0, cols - 1));
+                    let fieldY = Math.floor(p.constrain(particle.pos.y / fieldResolution, 0, rows - 1));
+                    let force = flowField[fieldX][fieldY].copy();
+                    
+                    // Apply physics
+                    particle.acc.add(force);
+                    particle.acc.y += gravity;
+                    
+                    // Apply viscosity (drag)
+                    particle.vel.mult(1 - viscosity * 0.1);
+                    
+                    // Update position
+                    particle.vel.add(particle.acc);
+                    particle.pos.add(particle.vel);
+                    particle.acc.mult(0);
+                    
+                    // Check collisions with obstacles
+                    checkObstacleCollisions(particle);
+                    
+                    // Boundary conditions
+                    if (particle.pos.y > p.height + 50 || particle.pos.x < -50 || particle.pos.x > p.width + 50) {
+                        particles.splice(i, 1);
+                        continue;
+                    }
+                    
+                    // Draw particle
+                    drawParticle(particle);
+                    
+                    // Life cycle
+                    particle.life--;
+                    if (particle.life <= 0) {
+                        particles.splice(i, 1);
+                    }
+                }
+            }
+            
+            function checkObstacleCollisions(particle) {
+                for (let obstacle of obstacles) {
+                    let d = p.dist(particle.pos.x, particle.pos.y, obstacle.x, obstacle.y);
+                    if (d < obstacle.r) {
+                        // Simple collision response
+                        let push = p5.Vector.sub(particle.pos, p.createVector(obstacle.x, obstacle.y));
+                        push.normalize().mult(pressure * 5);
+                        particle.vel.add(push);
+                        
+                        // Visual feedback
+                        particle.color = p.color(255, 150);
+                        particle.size *= 1.1;
+                    }
+                }
+            }
+            
+            function drawParticle(particle) {
+                let alpha = p.map(particle.life, 0, particle.maxLife, 0, 150) * quality;
+                p.fill(p.red(particle.color), p.green(particle.color), p.blue(particle.color), alpha);
+                p.circle(particle.pos.x, particle.pos.y, particle.size * quality);
+            }
+            
+            function drawObstacles() {
+                for (let obstacle of obstacles) {
+                    let pulse = p.sin(p.millis() * 0.005 + obstacle.x * 0.01) * 5;
+                    p.fill(255, 30);
+                    p.circle(obstacle.x, obstacle.y, obstacle.r * 2 + pulse);
+                    p.fill(255, 100);
+                    p.circle(obstacle.x, obstacle.y, obstacle.r * 1.5 + pulse * 0.5);
+                }
+            }
+            
+            function showInteractionFeedback() {
+                p.noFill();
+                p.stroke(255, 100);
+                p.strokeWeight(2);
+                p.circle(p.mouseX, p.mouseY, 50);
+                p.noStroke();
+            }
+            
+            p.mousePressed = () => {
+                // Change fluid properties on click
+                viscosity = p.map(p.mouseX, 0, p.width, 0.1, 0.9);
+                gravity = p.map(p.mouseY, 0, p.height, -0.1, 0.5);
+                pressure = p.map(p.mouseX + p.mouseY, 0, p.width + p.height, 0.1, 0.5);
+                turbulence = p.map(p.mouseY, 0, p.height, 0.1, 0.7);
+                
+                // Visual feedback
+                for (let i = 0; i < 50; i++) {
+                    particles.push(createParticle(p.mouseX, p.mouseY));
+                }
+            };
+            
+            p.mouseDragged = () => {
+                isDragging = true;
+                
+                // Create new obstacle if moved sufficiently
+                if (p.dist(p.mouseX, p.mouseY, lastMousePos.x, lastMousePos.y) > 30) {
+                    obstacles.push({
+                        x: p.mouseX,
+                        y: p.mouseY,
+                        r: p.random(20, 40)
+                    });
+                    
+                    // Limit number of obstacles
+                    if (obstacles.length > 20) {
+                        obstacles.shift();
+                    }
+                    
+                    lastMousePos.set(p.mouseX, p.mouseY);
+                }
+                
+                // Create particles along drag path
+                if (p.frameCount % 2 === 0) {
+                    particles.push(createParticle(p.mouseX + p.random(-10, 10), p.mouseY + p.random(-10, 10)));
+                }
+            };
+            
+            p.mouseReleased = () => {
+                isDragging = false;
+            };
+            
+            p.touchStarted = () => {
+                p.mousePressed();
+                return false;
+            };
+            
+            p.touchMoved = () => {
+                p.mouseDragged();
+                return false;
+            };
+            
+            p.touchEnded = () => {
+                p.mouseReleased();
+                return false;
+            };
+            
+            p.windowResized = () => {
+                p.resizeCanvas(p.min(p.windowWidth, 1200), p.min(p.windowHeight, 800));
+                bgColor = p.color(18, 18, 30);
+                initializeFlowField();
+            };
+        };
+        
+        new p5(sketch);
+    </script>
+
+              
+          
+                
+          
+              
